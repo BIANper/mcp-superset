@@ -21,7 +21,7 @@ startCommand:
       supersetAuthProvider:
         type: string
         default: db
-        description: "Authentication provider: db, ldap, or oauth"
+        description: "Authentication provider: db, ldap, or token (token requires HTTP transport and client headers)"
   commandFunction:
     |-
     (config) => ({

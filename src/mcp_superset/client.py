@@ -5,6 +5,7 @@ from typing import Any
 import httpx
 
 from mcp_superset.auth import AuthManager
+from mcp_superset.request_auth import MissingRequestTokenError, get_request_auth, is_token_provider
 
 
 class SupersetClient:
@@ -15,12 +16,25 @@ class SupersetClient:
     """
 
     def __init__(self, auth_manager: AuthManager, base_url: str):
-        self.auth = auth_manager
+        self._default_auth = auth_manager
         self.base_url = base_url.rstrip("/")
         self._client = httpx.AsyncClient(
             timeout=httpx.Timeout(60.0, connect=10.0),
             follow_redirects=True,
         )
+
+    def _effective_auth(self) -> AuthManager:
+        """Resolve AuthManager for the current MCP request (token mode) or global default."""
+        request_auth = get_request_auth()
+        if is_token_provider():
+            if request_auth is None:
+                raise MissingRequestTokenError(
+                    "SUPERSET_AUTH_PROVIDER=token requires X-SUPERSET-ACCESS-TOKEN on each HTTP request"
+                )
+            return request_auth
+        if request_auth is not None:
+            return request_auth
+        return self._default_auth
 
     async def _get_headers(self, need_csrf: bool = False) -> dict[str, str]:
         """Build request headers with a valid JWT and optionally a CSRF token.
@@ -31,7 +45,7 @@ class SupersetClient:
         Returns:
             Dictionary of HTTP headers.
         """
-        token = await self.auth.get_token(self._client)
+        token = await self._effective_auth().get_token(self._client)
         headers = {
             "Authorization": f"Bearer {token}",
             "Content-Type": "application/json",
@@ -39,7 +53,7 @@ class SupersetClient:
             "Referer": self.base_url,
         }
         if need_csrf:
-            csrf = await self.auth.get_csrf_token(self._client)
+            csrf = await self._effective_auth().get_csrf_token(self._client)
             headers["X-CSRFToken"] = csrf
         return headers
 
@@ -81,7 +95,7 @@ class SupersetClient:
 
         if resp.status_code == 401:
             # Token expired — invalidate and retry once
-            self.auth.invalidate()
+            self._effective_auth().invalidate()
             headers = await self._get_headers(need_csrf=need_csrf)
             resp = await self._client.request(
                 method=method,
@@ -180,7 +194,7 @@ class SupersetClient:
             params=params,
         )
         if resp.status_code == 401:
-            self.auth.invalidate()
+            self._effective_auth().invalidate()
             headers = await self._get_headers(need_csrf=False)
             headers.pop("Content-Type", None)
             headers["Accept"] = "*/*"
@@ -217,8 +231,8 @@ class SupersetClient:
             SupersetAPIError: If the API returns a 4xx/5xx status code.
         """
         url = f"{self.base_url}{endpoint}"
-        token = await self.auth.get_token(self._client)
-        csrf = await self.auth.get_csrf_token(self._client)
+        token = await self._effective_auth().get_token(self._client)
+        csrf = await self._effective_auth().get_csrf_token(self._client)
         headers = {
             "Authorization": f"Bearer {token}",
             "X-CSRFToken": csrf,
@@ -231,9 +245,9 @@ class SupersetClient:
             data=data or {},
         )
         if resp.status_code == 401:
-            self.auth.invalidate()
-            token = await self.auth.get_token(self._client)
-            csrf = await self.auth.get_csrf_token(self._client)
+            self._effective_auth().invalidate()
+            token = await self._effective_auth().get_token(self._client)
+            csrf = await self._effective_auth().get_csrf_token(self._client)
             headers["Authorization"] = f"Bearer {token}"
             headers["X-CSRFToken"] = csrf
             resp = await self._client.post(

@@ -29,16 +29,21 @@ SUPERSET_AUTH_PROVIDER = os.getenv("SUPERSET_AUTH_PROVIDER", "db")
 
 if not SUPERSET_BASE_URL:
     raise ValueError("SUPERSET_BASE_URL is required. Set it in .env or environment variables.")
-if not SUPERSET_USERNAME or not SUPERSET_PASSWORD:
-    raise ValueError("SUPERSET_USERNAME and SUPERSET_PASSWORD are required. Set them in .env or environment variables.")
 
-# Initialize client
-auth_manager = AuthManager(
-    base_url=SUPERSET_BASE_URL,
-    username=SUPERSET_USERNAME,
-    password=SUPERSET_PASSWORD,
-    provider=SUPERSET_AUTH_PROVIDER,
-)
+if SUPERSET_AUTH_PROVIDER == "token":
+    auth_manager = AuthManager(
+        base_url=SUPERSET_BASE_URL,
+        provider="token",
+    )
+elif not SUPERSET_USERNAME or not SUPERSET_PASSWORD:
+    raise ValueError("SUPERSET_USERNAME and SUPERSET_PASSWORD are required. Set them in .env or environment variables.")
+else:
+    auth_manager = AuthManager(
+        base_url=SUPERSET_BASE_URL,
+        username=SUPERSET_USERNAME,
+        password=SUPERSET_PASSWORD,
+        provider=SUPERSET_AUTH_PROVIDER,
+    )
 
 superset_client = SupersetClient(auth_manager=auth_manager, base_url=SUPERSET_BASE_URL)
 
@@ -69,6 +74,17 @@ async def health_check(request: Request) -> JSONResponse:
 
 
 if __name__ == "__main__":
+    from mcp_superset.request_auth import build_token_middleware
+
     host = os.getenv("SUPERSET_MCP_HOST", "127.0.0.1")
     port = int(os.getenv("SUPERSET_MCP_PORT", "8001"))
-    mcp.run(transport="streamable-http", host=host, port=port, stateless_http=True)
+    if SUPERSET_AUTH_PROVIDER == "token":
+        mcp.run(
+            transport="streamable-http",
+            host=host,
+            port=port,
+            stateless_http=True,
+            middleware=list(build_token_middleware(SUPERSET_BASE_URL)),
+        )
+    else:
+        mcp.run(transport="streamable-http", host=host, port=port, stateless_http=True)

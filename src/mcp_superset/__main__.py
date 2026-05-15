@@ -51,7 +51,7 @@ def main():
     parser.add_argument(
         "--version",
         action="version",
-        version="%(prog)s 0.2.4",
+        version="%(prog)s 0.2.6.dev1",
     )
 
     args = parser.parse_args()
@@ -60,13 +60,22 @@ def main():
     if args.env_file:
         os.environ["SUPERSET_MCP_ENV_FILE"] = args.env_file
 
-    from mcp_superset.server import mcp
+    from mcp_superset.request_auth import build_token_middleware
+    from mcp_superset.server import SUPERSET_AUTH_PROVIDER, SUPERSET_BASE_URL, mcp
 
-    kwargs = {"transport": args.transport}
+    if SUPERSET_AUTH_PROVIDER == "token" and args.transport == "stdio":
+        parser.error(
+            "SUPERSET_AUTH_PROVIDER=token requires HTTP transport (streamable-http or sse). "
+            "Clients must send X-SUPERSET-ACCESS-TOKEN on each request."
+        )
+
+    kwargs: dict = {"transport": args.transport}
     if args.transport != "stdio":
         kwargs["host"] = args.host
         kwargs["port"] = args.port
         kwargs["stateless_http"] = True
+        if SUPERSET_AUTH_PROVIDER == "token":
+            kwargs["middleware"] = list(build_token_middleware(SUPERSET_BASE_URL))
 
     mcp.run(**kwargs)
 

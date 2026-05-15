@@ -103,10 +103,42 @@ SUPERSET_USERNAME=admin
 SUPERSET_PASSWORD=your_password
 
 # Optional
-SUPERSET_AUTH_PROVIDER=db          # db (default) or ldap
+SUPERSET_AUTH_PROVIDER=db          # db (default), ldap, or token (HTTP headers)
 SUPERSET_MCP_HOST=127.0.0.1       # Server host (default: 127.0.0.1)
 SUPERSET_MCP_PORT=8001             # Server port (default: 8001)
 SUPERSET_MCP_TRANSPORT=streamable-http  # streamable-http (default), sse, or stdio
+```
+
+When `SUPERSET_AUTH_PROVIDER=token`, username/password are not required. Each HTTP request must include:
+
+| Header | Required | Description |
+|--------|----------|-------------|
+| `X-SUPERSET-ACCESS-TOKEN` | Yes | Superset JWT access token (not validated by MCP; forwarded to Superset API) |
+| `X-SUPERSET-REFRESH-TOKEN` | No | Refresh token; used on 401 to call `/api/v1/security/refresh` |
+
+Token mode requires `streamable-http` or `sse` transport (not `stdio`). Multiple clients with different tokens can connect concurrently; each request gets an isolated `AuthManager` via `ContextVar`.
+
+Example Cursor `.mcp.json` (remote HTTP):
+
+```json
+{
+  "mcpServers": {
+    "superset": {
+      "url": "http://localhost:8001/mcp",
+      "headers": {
+        "X-SUPERSET-ACCESS-TOKEN": "<your-access-token>",
+        "X-SUPERSET-REFRESH-TOKEN": "<your-refresh-token>"
+      }
+    }
+  }
+}
+```
+
+Server env for token mode:
+
+```env
+SUPERSET_BASE_URL=https://superset.example.com
+SUPERSET_AUTH_PROVIDER=token
 ```
 
 ### Running

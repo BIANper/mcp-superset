@@ -5,6 +5,10 @@ import time
 import httpx
 
 
+class AuthError(Exception):
+    """Authentication failed and cannot be recovered in the current mode."""
+
+
 class AuthManager:
     """Manages authentication with Superset REST API.
 
@@ -20,6 +24,8 @@ class AuthManager:
         username: str | None = None,
         password: str | None = None,
         provider: str = "db",
+        access_token: str | None = None,
+        refresh_token: str | None = None,
     ):
         self.base_url = base_url.rstrip("/")
         self.username = username
@@ -27,10 +33,10 @@ class AuthManager:
         self.provider = provider
 
         # JWT state
-        self._access_token: str | None = None
-        self._refresh_token: str | None = None
+        self._access_token: str | None = access_token
+        self._refresh_token: str | None = refresh_token
         self._csrf_token: str | None = None
-        self._token_expires_at: float = 0
+        self._token_expires_at: float = float("inf") if provider == "token" and access_token else 0
 
     async def get_token(self, client: httpx.AsyncClient) -> str:
         """Return a valid access_token, refreshing or re-logging in as needed.
@@ -51,8 +57,16 @@ class AuthManager:
             if refreshed:
                 return self._access_token
 
+        if self.provider == "token":
+            raise AuthError(
+                "Superset access token is invalid or expired and could not be refreshed. "
+                "Provide a new X-SUPERSET-ACCESS-TOKEN (and X-SUPERSET-REFRESH-TOKEN if needed)."
+            )
+
         # Full login
         await self._login(client)
+        if not self._access_token:
+            raise AuthError("Superset login did not return an access token")
         return self._access_token
 
     async def get_csrf_token(self, client: httpx.AsyncClient) -> str:
@@ -75,6 +89,9 @@ class AuthManager:
         Args:
             client: httpx async client used for HTTP requests.
         """
+        if self.provider == "token":
+            raise AuthError("Password login is disabled when SUPERSET_AUTH_PROVIDER=token")
+
         url = f"{self.base_url}/api/v1/security/login"
         payload = {
             "username": self.username,
@@ -113,8 +130,8 @@ class AuthManager:
             self._csrf_token = None
             return True
         except (httpx.HTTPStatusError, KeyError):
-            # Refresh failed — full login required
-            self._refresh_token = None
+            if self.provider == "token":
+                self._refresh_token = None
             return False
 
     async def _fetch_csrf(self, client: httpx.AsyncClient) -> None:
@@ -132,7 +149,14 @@ class AuthManager:
         self._csrf_token = data["result"]
 
     def invalidate(self) -> None:
-        """Reset all cached tokens, forcing re-authentication on next request."""
+        """Reset cached tokens, forcing re-authentication on next request."""
+        if self.provider == "token":
+            # Keep refresh token so a 401 can trigger /security/refresh for this client only.
+            self._access_token = None
+            self._csrf_token = None
+            self._token_expires_at = 0
+            return
+
         self._access_token = None
         self._refresh_token = None
         self._csrf_token = None
