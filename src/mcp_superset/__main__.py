@@ -66,7 +66,7 @@ def main():
     if SUPERSET_AUTH_PROVIDER == "token" and args.transport == "stdio":
         parser.error(
             "SUPERSET_AUTH_PROVIDER=token requires HTTP transport (streamable-http or sse). "
-            "Clients must send X-SUPERSET-ACCESS-TOKEN on each request."
+            "Clients must send X-SUPERSET-REFRESH-TOKEN on each request."
         )
 
     kwargs: dict = {"transport": args.transport}

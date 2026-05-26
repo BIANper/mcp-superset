@@ -5,20 +5,34 @@ from __future__ import annotations
 from contextvars import ContextVar, Token
 from typing import TYPE_CHECKING
 
+import httpx
 from starlette.middleware import Middleware
 from starlette.requests import Request
 from starlette.responses import JSONResponse
 from starlette.types import ASGIApp, Receive, Scope, Send
 
-from mcp_superset.auth import AuthManager
+from mcp_superset.auth import AuthError, AuthManager
+from mcp_superset.token_cache import token_session_cache
 
 if TYPE_CHECKING:
     from collections.abc import Sequence
 
-HEADER_ACCESS_TOKEN = "x-superset-access-token"
 HEADER_REFRESH_TOKEN = "x-superset-refresh-token"
 
 _request_auth: ContextVar[AuthManager | None] = ContextVar("superset_request_auth", default=None)
+
+# Shared client for middleware refresh only (no Superset API calls from tools).
+_refresh_client: httpx.AsyncClient | None = None
+
+
+def _get_refresh_client() -> httpx.AsyncClient:
+    global _refresh_client
+    if _refresh_client is None:
+        _refresh_client = httpx.AsyncClient(
+            timeout=httpx.Timeout(60.0, connect=10.0),
+            follow_redirects=True,
+        )
+    return _refresh_client
 
 
 class MissingRequestTokenError(RuntimeError):
@@ -52,7 +66,7 @@ def _is_health_path(path: str) -> bool:
 
 
 class SupersetTokenMiddleware:
-    """Inject per-request AuthManager from X-SUPERSET-* headers."""
+    """Inject per-request AuthManager from X-SUPERSET-REFRESH-TOKEN (cached access)."""
 
     def __init__(self, app: ASGIApp, base_url: str) -> None:
         self.app = app
@@ -68,24 +82,38 @@ class SupersetTokenMiddleware:
             await self.app(scope, receive, send)
             return
 
-        access_token = request.headers.get(HEADER_ACCESS_TOKEN)
-        if not access_token:
+        refresh_token = request.headers.get(HEADER_REFRESH_TOKEN)
+        if not refresh_token:
             response = JSONResponse(
                 {
                     "error": "missing_token",
-                    "message": "Missing required header X-SUPERSET-ACCESS-TOKEN",
+                    "message": "Missing required header X-SUPERSET-REFRESH-TOKEN",
                 },
                 status_code=401,
             )
             await response(scope, receive, send)
             return
 
-        refresh_token = request.headers.get(HEADER_REFRESH_TOKEN)
+        try:
+            cached = await token_session_cache.get_access_token(
+                refresh_token,
+                self.base_url,
+                _get_refresh_client(),
+            )
+        except AuthError as exc:
+            response = JSONResponse(
+                {"error": "auth_failed", "message": str(exc)},
+                status_code=401,
+            )
+            await response(scope, receive, send)
+            return
+
         auth = AuthManager(
             base_url=self.base_url,
             provider="token",
-            access_token=access_token,
+            access_token=cached.access_token,
             refresh_token=refresh_token,
+            access_expires_at=cached.expires_at,
         )
         ctx_token = set_request_auth(auth)
         try:

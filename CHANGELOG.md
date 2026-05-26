@@ -10,7 +10,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ### Added
 
 - **`SUPERSET_AUTH_PROVIDER=token`** — HTTP-only client-supplied JWT authentication
-  - Clients send `X-SUPERSET-ACCESS-TOKEN` and optional `X-SUPERSET-REFRESH-TOKEN` headers
+  - Clients send `X-SUPERSET-REFRESH-TOKEN`; MCP caches access tokens per refresh token
   - No local JWT validation; tokens are forwarded to Superset API
   - Per-request `AuthManager` via `ContextVar` for safe multi-client concurrent access
   - Automatic token refresh on 401 via `/api/v1/security/refresh`

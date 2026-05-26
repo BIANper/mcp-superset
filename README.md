@@ -113,10 +113,9 @@ When `SUPERSET_AUTH_PROVIDER=token`, username/password are not required. Each HT
 
 | Header | Required | Description |
 |--------|----------|-------------|
-| `X-SUPERSET-ACCESS-TOKEN` | Yes | Superset JWT access token (not validated by MCP; forwarded to Superset API) |
-| `X-SUPERSET-REFRESH-TOKEN` | No | Refresh token; used on 401 to call `/api/v1/security/refresh` |
+| `X-SUPERSET-REFRESH-TOKEN` | Yes | Superset JWT refresh token; MCP exchanges it for a short-lived access token and caches it per refresh token (shared HTTP service, multi-tenant safe) |
 
-Token mode requires `streamable-http` or `sse` transport (not `stdio`). Multiple clients with different tokens can connect concurrently; each request gets an isolated `AuthManager` via `ContextVar`.
+Token mode requires `streamable-http` or `sse` transport (not `stdio`). Multiple clients with different refresh tokens can connect concurrently; access tokens are cached in the MCP server process and refreshed before expiry (~15 min).
 
 Example Cursor `.mcp.json` (remote HTTP):
 
@@ -126,7 +125,6 @@ Example Cursor `.mcp.json` (remote HTTP):
     "superset": {
       "url": "http://localhost:8001/mcp",
       "headers": {
-        "X-SUPERSET-ACCESS-TOKEN": "<your-access-token>",
         "X-SUPERSET-REFRESH-TOKEN": "<your-refresh-token>"
       }
     }

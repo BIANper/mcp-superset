@@ -29,7 +29,7 @@ class SupersetClient:
         if is_token_provider():
             if request_auth is None:
                 raise MissingRequestTokenError(
-                    "SUPERSET_AUTH_PROVIDER=token requires X-SUPERSET-ACCESS-TOKEN on each HTTP request"
+                    "SUPERSET_AUTH_PROVIDER=token requires X-SUPERSET-REFRESH-TOKEN on each HTTP request"
                 )
             return request_auth
         if request_auth is not None:

@@ -26,6 +26,7 @@ class AuthManager:
         provider: str = "db",
         access_token: str | None = None,
         refresh_token: str | None = None,
+        access_expires_at: float | None = None,
     ):
         self.base_url = base_url.rstrip("/")
         self.username = username
@@ -36,7 +37,12 @@ class AuthManager:
         self._access_token: str | None = access_token
         self._refresh_token: str | None = refresh_token
         self._csrf_token: str | None = None
-        self._token_expires_at: float = float("inf") if provider == "token" and access_token else 0
+        if access_expires_at is not None:
+            self._token_expires_at = access_expires_at
+        elif provider == "token":
+            self._token_expires_at = 0
+        else:
+            self._token_expires_at = 0
 
     async def get_token(self, client: httpx.AsyncClient) -> str:
         """Return a valid access_token, refreshing or re-logging in as needed.
@@ -60,7 +66,7 @@ class AuthManager:
         if self.provider == "token":
             raise AuthError(
                 "Superset access token is invalid or expired and could not be refreshed. "
-                "Provide a new X-SUPERSET-ACCESS-TOKEN (and X-SUPERSET-REFRESH-TOKEN if needed)."
+                "Provide a valid X-SUPERSET-REFRESH-TOKEN."
             )
 
         # Full login
@@ -128,14 +134,23 @@ class AuthManager:
             self._token_expires_at = time.time() + 900
             # Reset CSRF — a new one is needed for the new token
             self._csrf_token = None
+            if self.provider == "token" and self._refresh_token:
+                from mcp_superset.token_cache import token_session_cache
+
+                token_session_cache.store(
+                    self._refresh_token,
+                    self._access_token,
+                    self._token_expires_at,
+                )
             return True
         except (httpx.HTTPStatusError, KeyError):
-            if self.provider == "token":
-                self._refresh_token = None
             return False
 
     async def _fetch_csrf(self, client: httpx.AsyncClient) -> None:
         """Fetch CSRF token via GET /api/v1/security/csrf_token/.
+
+        On 401, invalidates cached credentials and retries once (refresh or re-login),
+        matching the retry behavior in SupersetClient._request.
 
         Args:
             client: httpx async client used for HTTP requests.
@@ -144,6 +159,11 @@ class AuthManager:
         url = f"{self.base_url}/api/v1/security/csrf_token/"
         headers = {"Authorization": f"Bearer {token}"}
         resp = await client.get(url, headers=headers)
+        if resp.status_code == 401:
+            self.invalidate()
+            token = await self.get_token(client)
+            headers = {"Authorization": f"Bearer {token}"}
+            resp = await client.get(url, headers=headers)
         resp.raise_for_status()
         data = resp.json()
         self._csrf_token = data["result"]
@@ -151,10 +171,13 @@ class AuthManager:
     def invalidate(self) -> None:
         """Reset cached tokens, forcing re-authentication on next request."""
         if self.provider == "token":
-            # Keep refresh token so a 401 can trigger /security/refresh for this client only.
             self._access_token = None
             self._csrf_token = None
             self._token_expires_at = 0
+            if self._refresh_token:
+                from mcp_superset.token_cache import token_session_cache
+
+                token_session_cache.invalidate(self._refresh_token)
             return
 
         self._access_token = None
